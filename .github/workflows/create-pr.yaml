@@ -1,0 +1,71 @@
+name: Create PR in Another Repo on New Data Files
+
+on:
+  push:
+    paths:
+      - "data/**"
+    branches:
+      - main
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    env:
+      DESTINATION_REPO: alukach/gh-actions-r2r-example-receiver
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_DEPLOY_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Find newly added files in /data
+        id: find_new_files
+        run: |
+          # List newly added files using git diff
+          # --diff-filter=A means only added files
+          NEW_FILES=$(git diff --diff-filter=A --name-only ${{ github.event.before }} ${{ github.sha }} | grep '^data/')
+          echo "New files found:"
+          echo "$NEW_FILES"
+          # If you want to store one file or multiple, you can handle it here.
+          # For simplicity, let's assume we're dealing with just one added file.
+          FIRST_NEW_FILE=$(echo "$NEW_FILES" | head -n 1)
+          echo "new_file=$FIRST_NEW_FILE" >> $GITHUB_OUTPUT
+
+      - name: Clone target repo via SSH
+        run: git clone git@github.com:${{ env.DESTINATION_REPO }}.git upstream
+
+      - name: Configure Git
+        working-directory: upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - id: working-branch
+        run: echo "name=dataset/${{ steps.find_new_files.outputs.new_file }}" >> $GITHUB_OUTPUT
+
+      - name: Create and switch to new branch
+        working-directory: upstream
+        run: git checkout -b ${{ steps.working-branch.outputs.name }}
+
+      - name: Make changes based on newly added file
+        working-directory: upstream
+        run: |
+          echo "* ${{ steps.find_new_files.outputs.new_file }}" >> README.md
+
+      - name: Commit and push changes
+        working-directory: upstream
+        run: |
+          git add .
+          git commit -m "Automated update referencing new data file: ${{ steps.find_new_files.outputs.new_file }}"
+          git push --force origin ${{ steps.working-branch.outputs.name }}
